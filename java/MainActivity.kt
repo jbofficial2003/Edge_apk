@@ -22,8 +22,7 @@ import androidx.compose.ui.unit.dp
 import com.jahid.edge.ui.theme.EdgeTheme
 import org.opencv.android.OpenCVLoader
 import org.opencv.android.Utils
-import org.opencv.core.CvType
-import org.opencv.core.Mat
+import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
 import java.io.OutputStream
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -53,6 +52,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 }
+
 fun hidestatusbar(window: Window) {
     WindowCompat.setDecorFitsSystemWindows(window, false)
     val controller = WindowInsetsControllerCompat(window, window.decorView)
@@ -61,12 +61,11 @@ fun hidestatusbar(window: Window) {
         WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 }
 
-
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun EdgeApp(activity: ComponentActivity) {
     CompositionLocalProvider(LocalLayoutDirection provides LayoutDirection.Rtl) {
         var bitmap by remember { mutableStateOf<Bitmap?>(null) }
-        var edgePoints by remember { mutableStateOf<List<Pair<Int, Int>>>(emptyList()) }
 
         val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
             uri?.let {
@@ -76,13 +75,26 @@ fun EdgeApp(activity: ComponentActivity) {
         }
 
         Scaffold(
-            modifier = Modifier.fillMaxSize(),
+            topBar = @androidx.compose.runtime.Composable {
+                TopAppBar(
+                    title = {
+                        Row (modifier = Modifier.fillMaxWidth().padding(20.dp),
+                            horizontalArrangement = Arrangement.End
+                        ){
+                            Text("Edge Detection")
+                        }
+                    },
+
+                    colors = TopAppBarDefaults.topAppBarColors(colorResource(R.color.dark))
+                )
+
+            },
             containerColor = colorResource(R.color.grey_background),
             bottomBar = {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 250.dp),
+                        .padding(bottom = 48.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Button(
@@ -96,7 +108,6 @@ fun EdgeApp(activity: ComponentActivity) {
                     }
                 }
             }
-
         ) { innerPadding ->
             Column(
                 modifier = Modifier
@@ -106,13 +117,7 @@ fun EdgeApp(activity: ComponentActivity) {
                     .padding(top = 24.dp),
                 verticalArrangement = Arrangement.Top
             ) {
-                Text(
-                    text = "Edge Detection",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onBackground
-                )
 
-                Spacer(Modifier.height(24.dp))
 
                 bitmap?.let { bmp ->
                     Image(
@@ -125,18 +130,34 @@ fun EdgeApp(activity: ComponentActivity) {
                     )
 
                     Spacer(Modifier.height(24.dp))
-
-                    Button(
-                        onClick = {
-                            edgePoints = detectEdges(bmp)
-                            val svg = generateSVG(edgePoints, bmp.width, bmp.height)
-                            saveSvgToDownloads(activity, svg, "edge_output")
-                            convertSvgToPngWithDpi(activity, svg, "edge_output")
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Detect Edges and Save SVG + PNG")
+                        Button(
+                            onClick = {
+                                val svg = generateSVGFromContours(bmp, bmp.width, bmp.height)
+                                saveSvgToDownloads(activity, svg, "edge_output")
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                        ) {
+                            Text("Save svg")
+                        }
+                        Spacer(modifier = Modifier.width(16.dp))
+                        Button(
+                            onClick = {
+                                val svg = generateSVGFromContours(bmp, bmp.width, bmp.height)
+                                convertSvgToPngWithDpi(activity, svg, "edge_output")
+                            },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.secondary)
+                        ) {
+                            Text("Save PNG")
+                        }
                     }
                 }
             }
@@ -144,28 +165,28 @@ fun EdgeApp(activity: ComponentActivity) {
     }
 }
 
+// --- Edge detection and SVG generation using contours ---
+fun generateSVGFromContours(bitmap: Bitmap, width: Int, height: Int): String {
+    // Convert Bitmap to Mat
+    val src = Mat()
+    Utils.bitmapToMat(bitmap, src)
 
+    // Convert to grayscale
+    val gray = Mat()
+    Imgproc.cvtColor(src, gray, Imgproc.COLOR_RGBA2GRAY)
 
+    // Blur to reduce noise
+    val blurred = Mat()
+    Imgproc.GaussianBlur(gray, blurred, Size(5.0, 5.0), 0.0)
 
-fun detectEdges(bitmap: Bitmap): List<Pair<Int, Int>> {
-    val mat = Mat(bitmap.height, bitmap.width, CvType.CV_8UC1)
-    val tmp = Mat()
-    Utils.bitmapToMat(bitmap, tmp)
-    Imgproc.cvtColor(tmp, mat, Imgproc.COLOR_BGR2GRAY)
-    Imgproc.Canny(mat, mat, 100.0, 200.0)
+    // Canny edge detection
+    val edges = Mat()
+    Imgproc.Canny(blurred, edges, 80.0, 150.0) // You can tweak these thresholds
 
-    val points = mutableListOf<Pair<Int, Int>>()
-    for (i in 0 until mat.rows()) {
-        for (j in 0 until mat.cols()) {
-            if (mat.get(i, j)[0] > 0) {
-                points.add(Pair(j, i))
-            }
-        }
-    }
-    return points
-}
+    // Find contours
+    val contours = mutableListOf<MatOfPoint>()
+    Imgproc.findContours(edges, contours, Mat(), Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE)
 
-fun generateSVG(edgePoints: List<Pair<Int, Int>>, width: Int, height: Int): String {
     val builder = StringBuilder()
     builder.append(
         """
@@ -174,79 +195,79 @@ fun generateSVG(edgePoints: List<Pair<Int, Int>>, width: Int, height: Int): Stri
              viewBox="0 0 $width $height" 
              version="1.1">
           <rect width="100%" height="100%" fill="black"/>
-    """.trimIndent()
+        """.trimIndent()
     )
 
-    for ((x, y) in edgePoints) {
-        builder.append("<rect x=\"$x\" y=\"$y\" width=\"1\" height=\"1\" fill=\"white\"/>")
+    for (contour in contours) {
+        builder.append("<polyline points=\"")
+        for (point in contour.toArray()) {
+            builder.append("${point.x},${point.y} ")
+        }
+        builder.append("\" style=\"fill:none;stroke:white;stroke-width:1\"/>\n")
     }
 
     builder.append("</svg>")
     return builder.toString()
 }
 
-
+// --- SVG and PNG saving functions (unchanged) ---
 fun saveSvgToDownloads(context: ComponentActivity, svgContent: String, fileName: String) {
-    val contentValues = ContentValues().apply {
-        put(MediaStore.Downloads.DISPLAY_NAME, "$fileName.svg")
-        put(MediaStore.Downloads.MIME_TYPE, "image/svg+xml")
-        put(MediaStore.Downloads.IS_PENDING, 1)
-    }
-
-    val resolver = context.contentResolver
-    val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-    val itemUri: Uri? = resolver.insert(collection, contentValues)
-
-    itemUri?.let { uri ->
-        resolver.openOutputStream(uri)?.use { outputStream: OutputStream ->
-            outputStream.write(svgContent.toByteArray())
-            outputStream.flush()
+    try {
+        val contentValues = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, "$fileName.svg")
+            put(MediaStore.Downloads.MIME_TYPE, "image/svg+xml")
+            put(MediaStore.Downloads.IS_PENDING, 1)
         }
 
-        contentValues.clear()
-        contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
-        resolver.update(uri, contentValues, null, null)
+        val resolver = context.contentResolver
+        val collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+        val itemUri: Uri? = resolver.insert(collection, contentValues)
 
-        Toast.makeText(context, "SVG saved to Downloads", Toast.LENGTH_SHORT).show()
-    } ?: run {
-        Toast.makeText(context, "Failed to save SVG", Toast.LENGTH_SHORT).show()
+        itemUri?.let { uri ->
+            resolver.openOutputStream(uri)?.use { outputStream: OutputStream ->
+                outputStream.write(svgContent.toByteArray())
+                outputStream.flush()
+            }
+
+            contentValues.clear()
+            contentValues.put(MediaStore.Downloads.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
+
+            Toast.makeText(context, "SVG saved to Downloads", Toast.LENGTH_SHORT).show()
+        } ?: run {
+            Toast.makeText(context, "Failed to save SVG", Toast.LENGTH_SHORT).show()
+        }
+    } catch (e: Exception) {
+        Toast.makeText(context, "SVG save error: ${e.message}", Toast.LENGTH_SHORT).show()
+        e.printStackTrace()
     }
 }
-
-
-
 
 fun convertSvgToPngWithDpi(context: ComponentActivity, svgContent: String, fileName: String, targetDpi: Int = 72) {
     try {
         val svg = SVG.getFromString(svgContent)
 
-        val svgWidthInInches = svg.documentWidth / 96f // AndroidSVG assumes 96 DPI
-        val svgHeightInInches = svg.documentHeight / 96f
+        val svgWidth = if (svg.documentWidth > 0) svg.documentWidth else 512f
+        val svgHeight = if (svg.documentHeight > 0) svg.documentHeight else 512f
 
-        if (svgWidthInInches <= 0 || svgHeightInInches <= 0) {
-            Toast.makeText(context, "SVG has invalid dimensions", Toast.LENGTH_SHORT).show()
-            return
-        }
+        val svgWidthInInches = svgWidth / 96f // AndroidSVG assumes 96 DPI
+        val svgHeightInInches = svgHeight / 96f
 
-        // Target bitmap dimensions based on desired DPI
         val targetWidthPx = (svgWidthInInches * targetDpi).toInt()
         val targetHeightPx = (svgHeightInInches * targetDpi).toInt()
 
-        // Set SVG internal size
-        svg.setDocumentWidth(svg.documentWidth)
-        svg.setDocumentHeight(svg.documentHeight)
+        svg.setDocumentWidth(svgWidth)
+        svg.setDocumentHeight(svgHeight)
 
-        // Create high-res bitmap and scale canvas
         val bitmap = Bitmap.createBitmap(targetWidthPx, targetHeightPx, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
 
-        val scaleX = targetWidthPx / svg.documentWidth
-        val scaleY = targetHeightPx / svg.documentHeight
+        val scaleX = targetWidthPx / svgWidth
+        val scaleY = targetHeightPx / svgHeight
         canvas.scale(scaleX, scaleY)
 
         svg.renderToCanvas(canvas)
 
-        // Save to Downloads
         val contentValues = ContentValues().apply {
             put(MediaStore.Downloads.DISPLAY_NAME, "$fileName.png")
             put(MediaStore.Downloads.MIME_TYPE, "image/png")
@@ -269,9 +290,8 @@ fun convertSvgToPngWithDpi(context: ComponentActivity, svgContent: String, fileN
         } ?: run {
             Toast.makeText(context, "Failed to save PNG", Toast.LENGTH_SHORT).show()
         }
-
     } catch (e: Exception) {
-        Toast.makeText(context, "Error during SVG → PNG", Toast.LENGTH_SHORT).show()
+        Toast.makeText(context, "Error during SVG → PNG: ${e.message}", Toast.LENGTH_SHORT).show()
         e.printStackTrace()
     }
 }
